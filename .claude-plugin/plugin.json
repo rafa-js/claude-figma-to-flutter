@@ -1,0 +1,8 @@
+{
+  "name": "figma-to-flutter",
+  "description": "Replicate Figma frames in Flutter and verify the result with a deterministic render-and-compare loop (SSIM gate plus multimodal critic). Ships the figma-to-flutter skill and the /figma-to-flutter:setup command.",
+  "version": "1.0.0",
+  "author": {
+    "name": "r.jimenez"
+  }
+}

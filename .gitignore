@@ -1,0 +1,29 @@
+# macOS
+.DS_Store
+
+# Local Claude Code config (per-user, never share)
+.claude/settings.local.json
+.claude/tasks/
+.claude/tool-results/
+
+# Editor / IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Python (in case anyone runs scripts/diff.py from a venv inside this repo)
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Node (for scripts/figma_pull.ts / loop.ts)
+node_modules/
+*.log
+npm-debug.log*
+
+# OS / temp
+*~
+.env
+.env.local

@@ -1,0 +1,13 @@
+{
+  "name": "flutter-ui-skill",
+  "owner": {
+    "name": "r.jimenez"
+  },
+  "plugins": [
+    {
+      "name": "figma-to-flutter",
+      "source": ".",
+      "description": "Replicate Figma frames in Flutter and verify with a deterministic render-and-compare loop."
+    }
+  ]
+}
