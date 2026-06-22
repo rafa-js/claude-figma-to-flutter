@@ -1,60 +1,65 @@
-# figma-to-flutter
+<div align="center">
 
-A Claude Code skill that replicates Figma designs in Flutter and verifies the
-result against the original with a deterministic render-and-compare loop. Two
-evaluators do the work: an SSIM + pixel-mismatch **gate** that decides "are we
-done", and a multimodal **critic** that decides "what to fix next". The agent
-keeps iterating until the gate passes, a plateau is detected, or an iteration
-cap is reached.
+# claude-figma-to-flutter
 
-This README covers installing the skill and using it end to end on a Figma
-file with **multiple screens**.
+**Turn Figma screens into Flutter UI with a Claude Code skill that pixel-checks itself against the original, frame by frame, until fidelity holds.**
 
-## What you need
+[Overview](#overview) • [Features](#features) • [Install](#install) • [Quickstart](#quickstart) • [How it works](#how-it-works) • [Troubleshooting](#troubleshooting)
 
-- **Flutter SDK** with `flutter test` working (the render harness runs as a
-  headless widget test — no emulator or device needed).
+</div>
+
+---
+
+## Overview
+
+A Claude Code plugin that ships two things:
+
+- **`figma-to-flutter`** — a model-invoked skill that runs a closed render-and-compare loop on each Figma frame: generate widget, render to PNG, diff against the Figma export, critique the gap, fix the top items, repeat — until an SSIM gate passes or a plateau detector stops the loop.
+- **`/figma-to-flutter:setup`** — a slash command that does the one-time setup in your Flutter repo: copies harness templates, wires fonts and assets, checks Python and Figma access, and reports anything still blocking before the first run.
+
+> [!NOTE]
+> **Why a loop?** Generation is the easy half. The value is in the harness: a quantitative gate (SSIM + pixel mismatch) decides *"are we done"*, and a multimodal critic decides *"what to fix next"*. The number gates; the critique steers. One won't do the job of the other.
+
+## Features
+
+- **Render-and-compare loop** — golden-style widget tests capture each frame to PNG; diff and critique run outside Flutter.
+- **Two evaluators, one job each** — SSIM + pixel mismatch is the gate; the agent reading reference and render side-by-side is the steerer.
+- **Bottom-up composition** — shared components first, screens last. Tighter loops, cleaner diffs, fewer iterations on layout noise.
+- **Auto-stop built in** — iteration cap (default `8`), plateau detection across consecutive attempts, and an explicit "don't pixel-chase" SSIM target around `0.95`.
+- **One install, both artifacts** — `/plugin install` exposes the skill and the setup command together.
+- **Figma MCP first, REST fallback** — works whether you have the official Figma plugin or just a personal access token.
+- **Per-task checkpoints** — every frame has its own `checkpoint.md`, attempt history, scores, and critique log. Sessions resume cold.
+
+## Prerequisites
+
+- **[Claude Code](https://docs.claude.com/en/docs/claude-code)** — the CLI that runs the skill.
+- **[Flutter SDK](https://docs.flutter.dev/get-started/install)** — `flutter test` must work; the harness is a headless widget test, no emulator needed.
 - **Python 3.10+** with `pillow`, `numpy`, `scikit-image` for the diff script.
-- **Node 18+** with `tsx` (or `ts-node`) if you use the REST fallback or the
-  CI orchestrator. Optional if you stay on MCP.
 - **Figma access**, one of:
-  - Official Figma MCP server (preferred) — endpoint
-    `https://mcp.figma.com/mcp`, installed in Claude Code as a plugin.
-  - Figma REST API + a personal access token, via the
-    `FIGMA_TOKEN` env var.
-- **The Figma file URL** for the screens you want to implement. Each frame URL
-  has the form `https://www.figma.com/design/<file_key>/...?node-id=<node_id>`
-  — both pieces are needed per frame.
+  - the official Figma MCP server (`https://mcp.figma.com/mcp`, recommended), or
+  - a Figma personal access token exported as `FIGMA_TOKEN`.
 
-## Install the plugin
+## Install
 
-This repo is packaged as a Claude Code plugin marketplace named
-`flutter-ui-skill` that ships one plugin (`figma-to-flutter`). One install
-gets you both the model-invoked skill and the `/figma-to-flutter:setup`
-slash command.
-
-In a Claude Code session, run:
+In a Claude Code session:
 
 ```
 /plugin marketplace add rafa-js/claude-figma-to-flutter
 /plugin install figma-to-flutter@flutter-ui-skill
 ```
 
-(For local development, swap the first command for an absolute path:
-`/plugin marketplace add /path/to/claude-figma-to-flutter`.)
+You will then have:
 
-After install you should see, in `/plugin list`:
+- the skill `figma-to-flutter` — auto-triggers on any Figma-to-Flutter request, and
+- the command `/figma-to-flutter:setup` — run once per Flutter repo.
 
-- The skill `figma-to-flutter` (auto-triggers on Figma-to-Flutter requests).
-- The command `/figma-to-flutter:setup` (run once per target repo).
+> [!TIP]
+> To update later: `/plugin marketplace update flutter-ui-skill` then `/plugin update figma-to-flutter@flutter-ui-skill`.
 
-To update later, `/plugin marketplace update flutter-ui-skill` then
-`/plugin update figma-to-flutter@flutter-ui-skill`.
+<details>
+<summary><b>Local development install</b></summary>
 
-### Local development install
-
-If you are iterating on the plugin source, point Claude Code at it directly
-instead of going through the marketplace:
+If you are iterating on the plugin source, point Claude Code at it directly instead of going through the marketplace:
 
 ```bash
 claude --plugin-dir /path/to/claude-figma-to-flutter
@@ -62,229 +67,126 @@ claude --plugin-dir /path/to/claude-figma-to-flutter
 
 Use `/reload-plugins` after every edit.
 
-### Install the Figma MCP plugin (recommended)
+</details>
+
+### Optional: Figma MCP plugin
 
 ```bash
 claude plugin install figma@claude-plugins-official
 ```
 
-The plugin gives the agent first-class read tools for Figma code, images, and
-variable definitions. If you can't use it, set `FIGMA_TOKEN` in your shell
-and the skill will fall back to `scripts/figma_pull.ts` against the REST API.
+The MCP plugin gives the agent first-class read tools for Figma code, images, and variable definitions. Without it, the skill falls back to the REST API via `FIGMA_TOKEN`.
 
-### Install the Python diff dependencies
+> [!IMPORTANT]
+> If the Figma file uses Code Connect to map components to real Flutter widgets, the MCP output points the agent straight at them — that single lever cuts the most iterations out of the loop. Worth confirming with the design team before the first run.
+
+### Diff dependencies
 
 ```bash
 pip install pillow numpy scikit-image
 ```
 
-You can do this in a venv inside the target Flutter repo if you prefer — the
-skill just shells out to `python scripts/diff.py`.
+The setup command (next section) checks for these and will offer to install them.
 
-## One-time setup in the target Flutter repo
+## Quickstart
 
-From the root of your Flutter project, run the setup command that ships
-with the plugin:
+### 1. Set up your Flutter repo (once)
+
+From the root of your Flutter project, in a Claude Code session:
 
 ```
 /figma-to-flutter:setup
 ```
 
-The command walks the agent through every step interactively — copying
-harness templates into `test/harness/`, creating the `lib/theme/`,
-`test/golden/`, and `.claude/tasks/` directories, proposing the
-`pubspec.yaml` and `.gitignore` edits (with diffs, before applying),
-checking Python diff deps, confirming Figma access (MCP plugin or
-`FIGMA_TOKEN`), and verifying the project is ready. It skips anything that
-is already in place, so it is safe to re-run whenever you change the design
-fonts or move repos.
+The command walks the agent through every prep step interactively — copying harness templates into `test/harness/`, creating the directory skeleton, proposing `pubspec.yaml` and `.gitignore` edits (with diffs, before applying), checking Python deps, confirming Figma access, and verifying the project is ready. It skips work already done, so it is safe to re-run.
 
-### What the command will ask you for
+It will ask you for:
 
-Things the agent cannot infer; have these ready:
+- the Figma file URL (optional at setup time, required before the first frame run),
+- font families and weights used in the design (defaults to Inter at Regular/Medium/SemiBold/Bold),
+- export scale / DPR — usually `1` or `2` (defaults to `2`), and
+- Figma access method (MCP plugin or REST token).
 
-- The **Figma file URL** for the design (optional at setup time, required
-  before the first frame run).
-- **Font families and weights** used in the design (e.g. "Inter Regular,
-  Medium, SemiBold, Bold"). Defaults to Inter at those four weights if
-  unspecified.
-- **Export scale (DPR)** your Figma exports use — usually `1` or `2`.
-  Defaults to `2`.
-- **Figma access method** — the MCP plugin (recommended) or a personal
-  access token in `FIGMA_TOKEN`.
+The one thing it cannot do for you: **drop the `.ttf` font files into `assets/fonts/`**. Font licensing means the agent cannot fetch them; the command lists the exact filenames it expects so you can drag them in afterwards.
 
-### What you still do yourself
+### 2. Implement a multi-screen design
 
-Two things the command intentionally does not automate:
+Hand the agent the Figma URL and let the skill drive:
 
-- **Drop the `.ttf` font files** into `assets/fonts/`. Font licensing means
-  the agent cannot fetch them for you; the command lists the exact filenames
-  it expects.
-- **Confirm Code Connect.** If the Figma file uses Code Connect to map
-  components to Flutter widgets, the MCP output points the agent straight at
-  them, cutting iterations dramatically — worth checking with the design team
-  before the first run.
+> *"Here's the Figma URL: `<url>`. Implement all the screens using figma-to-flutter, starting with shared components."*
 
-Gate defaults (`ssim_min = 0.95`, `iteration_cap = 8`,
-`diff_threshold = 0.10`) are set in each task's `target.md`. Override per
-task if a screen has unusually heavy gradients or photography.
+The agent will:
 
-## End-to-end workflow for a multi-screen Figma file
+1. **Inventory** the frames in the file, assign kebab-case task IDs (`onboarding-welcome`, `feed-home`, ...), and group them into two waves: shared components and screens.
+2. **Generate the token layer once** — pull `variables.json` from Figma, write `lib/theme/tokens.dart` (colors, type scale, spacing, radii), and wire `app_theme.dart`. Every widget references tokens, not literals.
+3. **Loop through Wave 1 — shared components.** Per frame: ingest → widget → render → diff → critique → fix → re-render, until SSIM clears the gate or a stop condition fires.
+4. **Loop through Wave 2 — screens.** Compose verified Wave 1 components plus screen-specific pieces; same loop. Discrepancies inside a Wave 1 component become bugs on that component task — fix once, reuse everywhere.
+5. **Sweep.** Final `flutter test` pass to catch cross-screen regressions, spot-check 2–3 screens visually against Figma, archive the `checkpoint.md` files as the audit trail.
 
-The skill works **one frame at a time**. For a multi-screen design, you wrap
-it in a per-screen task list and let the agent burn through them. Bottom-up
-composition (shared components first, screens last) gives tighter loops and
-cleaner diffs than going screen-by-screen from the start.
+> [!NOTE]
+> **Bottom-up composition is deliberate.** Smaller surfaces give tighter loops, cleaner diffs, and a critique that can localise faults. Going screen-first burns iterations on layout noise that components would have caught.
 
-### Step A — Inventory the design
+You stay in the loop for two decisions: approving the initial task list, and adjudicating any frame that stops on `stopped_plateau` with a critique you disagree with.
 
-Open the Figma file with the agent and ask it to enumerate the frames you
-want to ship. Capture, for each:
+## How it works
 
-- A short kebab-case `task-id` (e.g. `onboarding-welcome`, `feed-home`).
-- The `file_key` and `node_id` from the frame URL.
-- Logical size and export scale (typically 1x or 2x).
-- Which shared components the frame depends on.
+Two evaluators with different jobs:
 
-The agent writes this as a top-level plan in `.claude/tasks/_plan.md` (or
-just keeps it in conversation if there are only a few screens). Group the
-tasks into two waves:
+| Evaluator | Job | Tool |
+|---|---|---|
+| **Quantitative gate** | Decides *"are we done"* | SSIM + pixel mismatch ([`scripts/diff.py`](skills/figma-to-flutter/scripts/diff.py)) |
+| **Multimodal critic** | Decides *"what to fix next"* | The agent, viewing `reference.png`, `render.png`, and `diff.png` together against [`references/critique-prompt.md`](skills/figma-to-flutter/references/critique-prompt.md) |
 
-- **Wave 1 — shared components.** Buttons, cards, list rows, app bars,
-  anything that appears on more than one screen.
-- **Wave 2 — screens.** Each screen composes verified components from Wave 1
-  plus its own one-off pieces.
+A bare pixel score tells you a magnitude but not a cause; unstructured visual judgement drifts without a hard stop. Splitting the jobs prevents both failure modes.
 
-### Step B — Generate the token layer once
+Every frame is one task on disk:
 
-Before any widget work, the agent runs **Step 1 of `SKILL.md`** once for the
-whole file: pull `variables.json` from Figma, generate `lib/theme/tokens.dart`
-(colors, type scale, spacing, radii) mapping named Figma variables to named
-Dart tokens, and wire it into `lib/theme/app_theme.dart`. Every later widget
-references these tokens instead of literals, so corrections route into one
-file instead of fanning out.
+```
+.claude/tasks/<task-id>/
+├── spec.json                # distilled Figma node tree
+├── variables.json           # design tokens
+├── reference.png            # ground truth from Figma
+├── target.md                # gate config + which widget this builds
+├── checkpoint.md            # the single file a fresh session reads to resume
+└── attempts/
+    ├── 001/{render,diff}.png, scores.json, critique.md
+    ├── 002/...
+```
 
-### Step C — Run the loop on Wave 1 (components)
+`checkpoint.md` is the handoff contract. Drop a fresh agent on it and the loop picks up where it left off — no state lives in memory.
 
-For each component task, the agent follows the per-frame workflow from
-`SKILL.md`:
+> [!IMPORTANT]
+> Target SSIM around `0.95`, never `1.0`. Font hinting and subpixel rendering mean a Flutter render will never exactly match a Figma raster. The plateau detector and the iteration cap exist to stop pixel-chasing — trust them.
 
-0. **Ingest** — `scripts/figma_pull.ts` (or MCP) writes
-   `.claude/tasks/<task-id>/{spec.json, variables.json, reference.png, assets/, target.md}`.
-1. (Already done in Step B for the shared token layer.)
-2. **Generate the widget** from `spec.json`, translating auto-layout into
-   `Row` / `Column` with axis alignment and spacing — not absolute
-   positioning.
-3. **Render** via the capture test:
-   ```bash
-   flutter test test/golden/<task-id>_capture_test.dart --update-goldens
-   ```
-   PNG lands at `.claude/tasks/<task-id>/attempts/001/render.png`.
-4. **Diff**:
-   ```bash
-   python scripts/diff.py \
-     --reference .claude/tasks/<task-id>/reference.png \
-     --render    .claude/tasks/<task-id>/attempts/001/render.png \
-     --out       .claude/tasks/<task-id>/attempts/001/
-   ```
-   If `dims_match` is false, **stop and fix the harness `physicalSize` /
-   `devicePixelRatio` before reading the SSIM** — a dimension mismatch makes
-   every score meaningless.
-5. **Critique** — the agent opens `reference.png`, `render.png`, and
-   `diff.png` together and emits a ranked, capped (3-5 items) discrepancy
-   list per [references/critique-prompt.md](references/critique-prompt.md),
-   written to `attempts/<NNN>/critique.md`.
-6. **Decide** — gate passed → stop and update `checkpoint.md`. Otherwise
-   apply the top corrections, increment the attempt, return to step 2.
+<details>
+<summary><b>Optional: drive the loop from CI</b></summary>
 
-   Stop conditions: gate met, iteration cap (default 8), or plateau (SSIM
-   has not improved meaningfully across two consecutive attempts and the
-   critic reports only below-threshold cosmetic items).
-
-When a component task stops with `state: passed` in its
-`checkpoint.md`, the component is reusable in Wave 2.
-
-### Step D — Run the loop on Wave 2 (screens)
-
-Identical workflow, but the generated widget tree composes verified
-components from Wave 1 instead of building from scratch. The critique step
-should rarely fire on the inner components — most discrepancies will be
-layout-level (gap between sections, header padding, scroll-edge behavior).
-If a critique pins a discrepancy inside a Wave 1 component, treat it as a
-bug in that component task, fix and re-verify it, then re-render the screen.
-
-### Step E — Sweep and check out
-
-After every task is `passed` (or knowingly `stopped_plateau` with cosmetic
-residual), do one final pass:
-
-- Run the full `flutter test` suite to catch regressions across screens.
-- Spot-check 2-3 screens visually side-by-side against Figma for things SSIM
-  cannot see (typography rhythm across screens, semantic colour usage,
-  accessibility contrast).
-- Archive `.claude/tasks/` (or at least the `checkpoint.md` files) — they
-  are the audit trail of what was tried and why the loop stopped.
-
-## Driving it from a session
-
-In practice you do not run any of these commands by hand. A typical session
-looks like:
-
-> *"Here's the Figma URL: <url>. Implement all the screens in this file in
-> Flutter using the figma-to-flutter skill. Start with shared components,
-> then screens."*
-
-The agent:
-
-1. Invokes the skill, reads `SKILL.md`, inventories the frames.
-2. Generates `tokens.dart` once.
-3. Walks the component wave, running the loop per task and updating each
-   `checkpoint.md` as it goes.
-4. Walks the screen wave the same way.
-5. Reports per-task SSIM and stop reason at the end.
-
-You stay in the loop for two decisions: approving the initial task list, and
-adjudicating any task that stops on `stopped_plateau` with a critique you
-disagree with.
-
-## Optional: CI orchestration
-
-`scripts/loop.ts` is a thin runner for batch / CI use — it does **not**
-invoke the model; the critique step is still the agent's job. Use it when
-you want to re-verify every task after a token change:
+[`scripts/loop.ts`](skills/figma-to-flutter/scripts/loop.ts) is a thin runner for batch and CI use. It does **not** invoke the model — the critique step is still the agent's job — but it is useful when you want to re-verify every task after a token change:
 
 ```bash
 tsx scripts/loop.ts --task <task-id> --ssim-min 0.95 --max-iter 8
 ```
 
-For an interactive session, just let Claude Code drive `SKILL.md` directly.
+For interactive sessions, just let Claude Code drive [`SKILL.md`](skills/figma-to-flutter/SKILL.md) directly.
+
+</details>
 
 ## Troubleshooting
 
-- **`dims_match: false`** — the harness `physicalSize` or `devicePixelRatio`
-  does not match the Figma export. Recompute: `logical_size * dpr ==
-  exported_pixels`. Fix and re-render; do not read the SSIM until it matches.
-- **SSIM stuck around 0.6-0.8 with red text everywhere in `diff.png`** —
-  font mismatch. Check that the exact Figma `.ttf`s are in `assets/fonts/`,
-  registered with `FontLoader`, and listed in `pubspec.yaml`.
-- **SSIM oscillates between two attempts** — the critic is pixel-chasing.
-  Tighten `max_items` in the critique prompt (3 instead of 5), and trust the
-  plateau detection. Target SSIM ~0.95, never 1.0.
-- **Critique keeps flagging a network image** — you forgot to mock or stub
-  network images for the test. See the determinism checklist in
-  [references/setup.md](references/setup.md).
-- **REST ingest is slow or rate-limited** — install the official Figma MCP
-  plugin; the REST script is a fallback only.
+> [!WARNING]
+> **`dims_match: false` in `scores.json`** — the harness `physicalSize` or `devicePixelRatio` does not match the Figma export. Recompute: `logical_size * dpr == exported_pixels`. Fix the harness and re-render *before* reading the SSIM — a dimension mismatch makes every score meaningless.
+
+- **SSIM stuck around 0.6–0.8, red text everywhere in `diff.png`** — font mismatch. Check the exact Figma `.ttf` files are in `assets/fonts/`, registered with `FontLoader`, and listed in `pubspec.yaml`.
+- **SSIM oscillates between two attempts** — the critic is pixel-chasing. Tighten `max_items` in the critique prompt (3 instead of 5) and trust the plateau detector. Target ~`0.95`, not `1.0`.
+- **Critique keeps flagging a network image** — you forgot to mock network images in tests. See the determinism checklist in [references/setup.md](skills/figma-to-flutter/references/setup.md).
+- **REST ingest is slow or rate-limited** — install the official Figma MCP plugin; the REST script is a fallback only.
 
 ## Further reading
 
-- [SKILL.md](SKILL.md) — the per-frame workflow the agent follows.
-- [references/design.md](references/design.md) — why the loop is shaped this
-  way (two evaluators, bottom-up composition, plateau detection).
-- [references/setup.md](references/setup.md) — Figma access, DPR matching,
-  fonts, determinism.
-- [references/file-layout.md](references/file-layout.md) — repo and task
-  directory layout.
-- [references/critique-prompt.md](references/critique-prompt.md) — the exact
-  critique template for Step 5.
-- [CLAUDE.md](CLAUDE.md) — notes for agents working on the skill itself.
+- [SKILL.md](skills/figma-to-flutter/SKILL.md) — the per-frame workflow the agent follows.
+- [references/design.md](skills/figma-to-flutter/references/design.md) — why the loop is shaped this way (two evaluators, bottom-up composition, plateau detection).
+- [references/setup.md](skills/figma-to-flutter/references/setup.md) — Figma access, DPR matching, fonts, determinism.
+- [references/file-layout.md](skills/figma-to-flutter/references/file-layout.md) — repo and task directory layout.
+- [references/critique-prompt.md](skills/figma-to-flutter/references/critique-prompt.md) — the exact critique template.
+- [CLAUDE.md](CLAUDE.md) — notes for agents working on the plugin itself.
+- [Claude Code plugins](https://code.claude.com/docs/en/plugins) — official docs.
