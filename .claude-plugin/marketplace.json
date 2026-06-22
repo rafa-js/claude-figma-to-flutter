@@ -1,8 +1,6 @@
 {
   "name": "flutter-ui-skill",
-  "owner": {
-    "name": "r.jimenez"
-  },
+  "owner": { "name": "Rafa", "url": "https://github.com/rafa-js" },
   "plugins": [
     {
       "name": "figma-to-flutter",
